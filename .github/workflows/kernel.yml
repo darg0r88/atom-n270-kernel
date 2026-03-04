@@ -75,8 +75,9 @@ jobs:
       - name: Compile
         run: |
           cd ${{ env.KDIR }}
-          # Usar todos los hilos disponibles para velocidad
-          make ARCH=i386 bindeb-pkg -j$(nproc) LOCALVERSION=-atom-extreme
+          # Forzar arquitectura de 32 bits para el compilador y el empaquetado
+          export CC="gcc -m32"
+          make ARCH=i386 bindeb-pkg -j$(nproc) LOCALVERSION=-atom-extreme KBUILD_BUILD_ARCH=i386
 
       - name: Upload Artifacts
         uses: actions/upload-artifact@v4
