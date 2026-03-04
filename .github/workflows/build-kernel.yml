@@ -8,18 +8,26 @@ on:
 
 jobs:
   build:
-    runs-on: ubuntu-22.04 # Usamos Ubuntu 22.04 para mejor compatibilidad con kernels antiguos
+    runs-on: ubuntu-22.04 # Ubuntu 22.04 es más estable para kernels antiguos
     steps:
+      - name: Maximize Build Space
+        run: |
+          sudo rm -rf /usr/share/dotnet
+          sudo rm -rf /usr/local/lib/android
+          sudo rm -rf /opt/ghc
+          sudo rm -rf /usr/local/share/boost
+          sudo rm -rf "$AGENT_TOOLSDIRECTORY"
+
       - name: Install dependencies
         run: |
+          sudo dpkg --add-architecture i386
           sudo apt-get update
-          sudo apt-get install -y build-essential libncurses-dev bison flex libssl-dev libelf-dev xz-utils wget bc gcc-multilib rsync kmod dwarves debhelper pahole
+          sudo apt-get install -y build-essential libncurses-dev bison flex libssl-dev libelf-dev xz-utils wget bc gcc-multilib rsync kmod dwarves pahole zstd debhelper binutils-i686-linux-gnu gcc-i686-linux-gnu
 
       - name: Download Kernel 5.4 Source
         run: |
-          # Obtener la última versión estable de la rama 5.4
           KVER=$(wget -qO- https://www.kernel.org/finger_banner | grep ' 5.4.' | awk '{print $NF}' | head -n 1)
-          if [ -z "$KVER" ]; then KVER="5.4.269"; fi # Fallback de seguridad
+          if [ -z "$KVER" ]; then KVER="5.4.269"; fi
           echo "Target Kernel Version: $KVER"
           wget -c https://cdn.kernel.org/pub/linux/kernel/v5.x/linux-$KVER.tar.xz
           tar -xf linux-$KVER.tar.xz
@@ -28,10 +36,9 @@ jobs:
       - name: Extreme Configuration for Atom N270
         run: |
           cd ${{ env.KDIR }}
-          # Usar configuración base de 32 bits
           make ARCH=i386 i386_defconfig
           
-          # 1. Arquitectura y Procesador (Atom N270 es 32 bits Bonnell)
+          # 1. Arquitectura y Procesador
           ./scripts/config --enable CONFIG_MATOM
           ./scripts/config --disable CONFIG_M686
           ./scripts/config --enable CONFIG_X86_PAE
@@ -39,64 +46,37 @@ jobs:
           ./scripts/config --disable CONFIG_HIGHMEM64G
           ./scripts/config --disable CONFIG_64BIT
           
-          # 2. Rendimiento y Latencia (N270 agradece PREEMPT)
+          # 2. Rendimiento y Latencia
           ./scripts/config --enable CONFIG_PREEMPT
           ./scripts/config --disable CONFIG_PREEMPT_VOLUNTARY
           ./scripts/config --disable CONFIG_PREEMPT_NONE
           ./scripts/config --enable CONFIG_HZ_1000
-          ./scripts/config --disable CONFIG_HZ_250
           ./scripts/config --set-val CONFIG_HZ 1000
-          ./scripts/config --enable CONFIG_TICK_ONESHOT
-          ./scripts/config --enable CONFIG_NO_HZ_COMMON
-          ./scripts/config --enable CONFIG_NO_HZ_IDLE
           
-          # 3. Desactivar Mitigaciones (Seguridad) - Impactan mucho en N270
+          # 3. Solución de errores de compilación conocidos en 5.4 + Ubuntu 22.04+
+          ./scripts/config --disable CONFIG_DEBUG_INFO_BTF
+          ./scripts/config --set-str CONFIG_SYSTEM_TRUSTED_KEYS ""
+          ./scripts/config --set-str CONFIG_SYSTEM_REVOCATION_KEYS ""
+          ./scripts/config --disable CONFIG_DEBUG_INFO
+          
+          # 4. Desactivar Mitigaciones (Rendimiento)
           ./scripts/config --disable CONFIG_CPU_MITIGATIONS
           ./scripts/config --disable CONFIG_PAGE_TABLE_ISOLATION
-          ./scripts/config --disable CONFIG_RETPOLINE
-          ./scripts/config --disable CONFIG_CPU_IBPB_ENTRY
-          ./scripts/config --disable CONFIG_CPU_IBRS_ENTRY
-          ./scripts/config --disable CONFIG_CPU_UNPRIV_SSBD_NO
-          ./scripts/config --disable CONFIG_CPU_SRBDS
-          ./scripts/config --disable CONFIG_GDS_FORCE_MITIGATION
-          ./scripts/config --disable CONFIG_SPECTRE_V1_ITLB
           
-          # 4. Limpieza de Drivers Innecesarios (Reducción de tamaño)
-          ./scripts/config --disable CONFIG_DRM_AMDGPU
-          ./scripts/config --disable CONFIG_DRM_RADEON
-          ./scripts/config --disable CONFIG_DRM_NOUVEAU
-          ./scripts/config --enable CONFIG_DRM_I915 # N270 suele llevar GMA950
-          ./scripts/config --disable CONFIG_WLAN_VENDOR_ADMTEK
-          ./scripts/config --disable CONFIG_WLAN_VENDOR_ATH
-          ./scripts/config --disable CONFIG_WLAN_VENDOR_ATMEL
-          ./scripts/config --disable CONFIG_WLAN_VENDOR_BROADCOM
-          ./scripts/config --disable CONFIG_WLAN_VENDOR_CISCO
-          ./scripts/config --disable CONFIG_WLAN_VENDOR_INTEL
-          ./scripts/config --disable CONFIG_WLAN_VENDOR_INTERSIL
-          ./scripts/config --disable CONFIG_WLAN_VENDOR_MARVELL
-          ./scripts/config --disable CONFIG_WLAN_VENDOR_MEDIATEK
-          ./scripts/config --disable CONFIG_WLAN_VENDOR_RALINK
-          ./scripts/config --disable CONFIG_WLAN_VENDOR_REALTEK
+          # 5. Drivers i915 (GMA950)
+          ./scripts/config --enable CONFIG_DRM_I915
           
-          # 5. Debugging y Otros (Gana espacio)
-          ./scripts/config --disable CONFIG_DEBUG_KERNEL
-          ./scripts/config --disable CONFIG_DEBUG_INFO
-          ./scripts/config --disable CONFIG_STACK_VALIDATION
-          ./scripts/config --disable CONFIG_FTRACE
-          ./scripts/config --disable CONFIG_KGDB
-          
-          # Aplicar configuración final
           make ARCH=i386 olddefconfig
 
-      - name: Build Kernel (.deb) with O3 & Bonnell Flags
+      - name: Build Kernel (.deb)
         run: |
           cd ${{ env.KDIR }}
-          # Inyectamos flags extremas de optimización en el compilador
+          # Usar el cross-compiler para asegurar que no se mezclen arquitecturas
           export KCFLAGS="-march=bonnell -mtune=bonnell -O3 -pipe -fno-stack-protector"
           export KCPPFLAGS="-march=bonnell -mtune=bonnell -O3 -pipe"
           
-          # Compilar paquete Debian
-          make ARCH=i386 bindeb-pkg -j$(nproc) LOCALVERSION=-atom-n270-extreme
+          # Forzar arquitectura i386 en el paquete deb
+          make ARCH=i386 CROSS_COMPILE=i686-linux-gnu- bindeb-pkg -j$(nproc) LOCALVERSION=-atom-n270-extreme KDEB_PKGVERSION=1
 
       - name: Upload Kernel Artifacts
         uses: actions/upload-artifact@v4
