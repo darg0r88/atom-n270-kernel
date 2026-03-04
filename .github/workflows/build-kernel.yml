@@ -1,0 +1,90 @@
+# .github/workflows/build-kernel.yml
+name: Build Optimized Atom N270 Kernel (i386)
+
+on:
+  workflow_dispatch: # Permite ejecución manual
+  push:
+    branches: [ master ]
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Install dependencies
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y build-essential libncurses-dev bison flex libssl-dev libelf-dev xz-utils wget bc gcc-multilib rsync kmod dwarves
+
+      - name: Download Kernel Source
+        run: |
+          KVER=$(wget -qO- https://www.kernel.org/finger_banner | grep 'The latest stable' | awk '{print $NF}')
+          echo "Kernel Version: $KVER"
+          wget https://cdn.kernel.org/pub/linux/kernel/v6.x/linux-$KVER.tar.xz
+          tar -xf linux-$KVER.tar.xz
+          echo "KDIR=linux-$KVER" >> $GITHUB_ENV
+
+      - name: Configure Kernel for Atom N270
+        run: |
+          cd ${{ env.KDIR }}
+          # Usar configuración base de 32 bits
+          make ARCH=i386 i386_defconfig
+          
+          # Procesador y Arquitectura (Atom N270 es 32 bits Bonnell)
+          ./scripts/config --enable CONFIG_MATOM
+          ./scripts/config --disable CONFIG_M686
+          ./scripts/config --enable CONFIG_X86_PAE
+          ./scripts/config --enable CONFIG_HIGHMEM64G
+          
+          # Rendimiento y Preempción
+          ./scripts/config --enable CONFIG_PREEMPT
+          ./scripts/config --disable CONFIG_PREEMPT_VOLUNTARY
+          ./scripts/config --disable CONFIG_PREEMPT_NONE
+          ./scripts/config --enable CONFIG_HZ_1000
+          ./scripts/config --disable CONFIG_HZ_250
+          ./scripts/config --set-val CONFIG_HZ 1000
+          
+          # Desactivar Mitigaciones (Seguridad) - Máximo rendimiento
+          ./scripts/config --disable CONFIG_CPU_MITIGATIONS
+          ./scripts/config --disable CONFIG_PAGE_TABLE_ISOLATION
+          ./scripts/config --disable CONFIG_RETPOLINE
+          ./scripts/config --disable CONFIG_CPU_IBPB_ENTRY
+          ./scripts/config --disable CONFIG_CPU_IBRS_ENTRY
+          ./scripts/config --disable CONFIG_CPU_UNPRIV_SSBD_NO
+          ./scripts/config --disable CONFIG_CPU_SRBDS
+          ./scripts/config --disable CONFIG_GDS_FORCE_MITIGATION
+          ./scripts/config --disable CONFIG_SPECTRE_V1_ITLB
+          
+          # Energía y Power Management
+          ./scripts/config --disable CONFIG_CPU_FREQ
+          ./scripts/config --disable CONFIG_SUSPEND
+          ./scripts/config --disable CONFIG_HIBERNATION
+          ./scripts/config --disable CONFIG_PM
+          
+          # Eliminar Debugging para ganar velocidad y reducir tamaño
+          ./scripts/config --disable CONFIG_DEBUG_KERNEL
+          ./scripts/config --disable CONFIG_DEBUG_INFO
+          ./scripts/config --disable CONFIG_FTRACE
+          ./scripts/config --disable CONFIG_STACKTRACER
+          ./scripts/config --disable CONFIG_KGDB
+          ./scripts/config --disable CONFIG_UBSAN
+          ./scripts/config --disable CONFIG_ASAN
+          
+          # Desactivar 64 bits por completo
+          ./scripts/config --disable CONFIG_64BIT
+          
+          # Aplicar cambios
+          make ARCH=i386 olddefconfig
+
+      - name: Build Kernel (.deb package)
+        run: |
+          cd ${{ env.KDIR }}
+          # Usamos -j$(nproc) para compilar con todos los núcleos del runner de GitHub
+          make ARCH=i386 bindeb-pkg -j$(nproc) LOCALVERSION=-atom-ultra-perf
+
+      - name: Upload Kernel Artifacts
+        uses: actions/upload-artifact@v4
+        with:
+          name: atom-n270-kernel-deb
+          path: |
+            *.deb
+            ${{ env.KDIR }}/.config
