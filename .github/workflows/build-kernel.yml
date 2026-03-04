@@ -1,5 +1,5 @@
 # .github/workflows/build-kernel.yml
-name: Build Optimized Atom N270 Kernel (i386)
+name: Build Extreme Optimized Atom N270 Kernel (v5.4 LTS)
 
 on:
   workflow_dispatch: # Permite ejecución manual
@@ -8,42 +8,49 @@ on:
 
 jobs:
   build:
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-22.04 # Usamos Ubuntu 22.04 para mejor compatibilidad con kernels antiguos
     steps:
       - name: Install dependencies
         run: |
           sudo apt-get update
-          sudo apt-get install -y build-essential libncurses-dev bison flex libssl-dev libelf-dev xz-utils wget bc gcc-multilib rsync kmod dwarves
+          sudo apt-get install -y build-essential libncurses-dev bison flex libssl-dev libelf-dev xz-utils wget bc gcc-multilib rsync kmod dwarves debhelper pahole
 
-      - name: Download Kernel Source
+      - name: Download Kernel 5.4 Source
         run: |
-          KVER=$(wget -qO- https://www.kernel.org/finger_banner | grep 'The latest stable' | awk '{print $NF}')
-          echo "Kernel Version: $KVER"
-          wget https://cdn.kernel.org/pub/linux/kernel/v6.x/linux-$KVER.tar.xz
+          # Obtener la última versión estable de la rama 5.4
+          KVER=$(wget -qO- https://www.kernel.org/finger_banner | grep ' 5.4.' | awk '{print $NF}' | head -n 1)
+          if [ -z "$KVER" ]; then KVER="5.4.269"; fi # Fallback de seguridad
+          echo "Target Kernel Version: $KVER"
+          wget -c https://cdn.kernel.org/pub/linux/kernel/v5.x/linux-$KVER.tar.xz
           tar -xf linux-$KVER.tar.xz
           echo "KDIR=linux-$KVER" >> $GITHUB_ENV
 
-      - name: Configure Kernel for Atom N270
+      - name: Extreme Configuration for Atom N270
         run: |
           cd ${{ env.KDIR }}
           # Usar configuración base de 32 bits
           make ARCH=i386 i386_defconfig
           
-          # Procesador y Arquitectura (Atom N270 es 32 bits Bonnell)
+          # 1. Arquitectura y Procesador (Atom N270 es 32 bits Bonnell)
           ./scripts/config --enable CONFIG_MATOM
           ./scripts/config --disable CONFIG_M686
           ./scripts/config --enable CONFIG_X86_PAE
-          ./scripts/config --enable CONFIG_HIGHMEM64G
+          ./scripts/config --enable CONFIG_HIGHMEM4G
+          ./scripts/config --disable CONFIG_HIGHMEM64G
+          ./scripts/config --disable CONFIG_64BIT
           
-          # Rendimiento y Preempción
+          # 2. Rendimiento y Latencia (N270 agradece PREEMPT)
           ./scripts/config --enable CONFIG_PREEMPT
           ./scripts/config --disable CONFIG_PREEMPT_VOLUNTARY
           ./scripts/config --disable CONFIG_PREEMPT_NONE
           ./scripts/config --enable CONFIG_HZ_1000
           ./scripts/config --disable CONFIG_HZ_250
           ./scripts/config --set-val CONFIG_HZ 1000
+          ./scripts/config --enable CONFIG_TICK_ONESHOT
+          ./scripts/config --enable CONFIG_NO_HZ_COMMON
+          ./scripts/config --enable CONFIG_NO_HZ_IDLE
           
-          # Desactivar Mitigaciones (Seguridad) - Máximo rendimiento
+          # 3. Desactivar Mitigaciones (Seguridad) - Impactan mucho en N270
           ./scripts/config --disable CONFIG_CPU_MITIGATIONS
           ./scripts/config --disable CONFIG_PAGE_TABLE_ISOLATION
           ./scripts/config --disable CONFIG_RETPOLINE
@@ -54,37 +61,47 @@ jobs:
           ./scripts/config --disable CONFIG_GDS_FORCE_MITIGATION
           ./scripts/config --disable CONFIG_SPECTRE_V1_ITLB
           
-          # Energía y Power Management
-          ./scripts/config --disable CONFIG_CPU_FREQ
-          ./scripts/config --disable CONFIG_SUSPEND
-          ./scripts/config --disable CONFIG_HIBERNATION
-          ./scripts/config --disable CONFIG_PM
+          # 4. Limpieza de Drivers Innecesarios (Reducción de tamaño)
+          ./scripts/config --disable CONFIG_DRM_AMDGPU
+          ./scripts/config --disable CONFIG_DRM_RADEON
+          ./scripts/config --disable CONFIG_DRM_NOUVEAU
+          ./scripts/config --enable CONFIG_DRM_I915 # N270 suele llevar GMA950
+          ./scripts/config --disable CONFIG_WLAN_VENDOR_ADMTEK
+          ./scripts/config --disable CONFIG_WLAN_VENDOR_ATH
+          ./scripts/config --disable CONFIG_WLAN_VENDOR_ATMEL
+          ./scripts/config --disable CONFIG_WLAN_VENDOR_BROADCOM
+          ./scripts/config --disable CONFIG_WLAN_VENDOR_CISCO
+          ./scripts/config --disable CONFIG_WLAN_VENDOR_INTEL
+          ./scripts/config --disable CONFIG_WLAN_VENDOR_INTERSIL
+          ./scripts/config --disable CONFIG_WLAN_VENDOR_MARVELL
+          ./scripts/config --disable CONFIG_WLAN_VENDOR_MEDIATEK
+          ./scripts/config --disable CONFIG_WLAN_VENDOR_RALINK
+          ./scripts/config --disable CONFIG_WLAN_VENDOR_REALTEK
           
-          # Eliminar Debugging para ganar velocidad y reducir tamaño
+          # 5. Debugging y Otros (Gana espacio)
           ./scripts/config --disable CONFIG_DEBUG_KERNEL
           ./scripts/config --disable CONFIG_DEBUG_INFO
+          ./scripts/config --disable CONFIG_STACK_VALIDATION
           ./scripts/config --disable CONFIG_FTRACE
-          ./scripts/config --disable CONFIG_STACKTRACER
           ./scripts/config --disable CONFIG_KGDB
-          ./scripts/config --disable CONFIG_UBSAN
-          ./scripts/config --disable CONFIG_ASAN
           
-          # Desactivar 64 bits por completo
-          ./scripts/config --disable CONFIG_64BIT
-          
-          # Aplicar cambios
+          # Aplicar configuración final
           make ARCH=i386 olddefconfig
 
-      - name: Build Kernel (.deb package)
+      - name: Build Kernel (.deb) with O3 & Bonnell Flags
         run: |
           cd ${{ env.KDIR }}
-          # Usamos -j$(nproc) para compilar con todos los núcleos del runner de GitHub
-          make ARCH=i386 bindeb-pkg -j$(nproc) LOCALVERSION=-atom-ultra-perf
+          # Inyectamos flags extremas de optimización en el compilador
+          export KCFLAGS="-march=bonnell -mtune=bonnell -O3 -pipe -fno-stack-protector"
+          export KCPPFLAGS="-march=bonnell -mtune=bonnell -O3 -pipe"
+          
+          # Compilar paquete Debian
+          make ARCH=i386 bindeb-pkg -j$(nproc) LOCALVERSION=-atom-n270-extreme
 
       - name: Upload Kernel Artifacts
         uses: actions/upload-artifact@v4
         with:
-          name: atom-n270-kernel-deb
+          name: atom-n270-kernel-5.4-deb
           path: |
             *.deb
             ${{ env.KDIR }}/.config
