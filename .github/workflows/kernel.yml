@@ -1,0 +1,62 @@
+name: Build Atom N270 Extreme Kernel
+
+on:
+  workflow_dispatch:
+  push:
+    branches: [ master ]
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Dependencies
+        run: sudo apt-get update && sudo apt-get install -y build-essential libncurses-dev bison flex libssl-dev libelf-dev xz-utils wget bc gcc-multilib rsync kmod dwarves
+
+      - name: Fetch Kernel
+        run: |
+          KVER=$(wget -qO- https://www.kernel.org/finger_banner | grep 'The latest stable' | awk '{print $NF}')
+          wget https://cdn.kernel.org/pub/linux/kernel/v6.x/linux-$KVER.tar.xz
+          tar -xf linux-$KVER.tar.xz
+          echo "KDIR=linux-$KVER" >> $GITHUB_ENV
+
+      - name: Ultra-Optimization Config
+        run: |
+          cd ${{ env.KDIR }}
+          make ARCH=i386 i386_defconfig
+          
+          # CPU & Arch (N270 optimization)
+          ./scripts/config --enable CONFIG_MATOM
+          ./scripts/config --disable CONFIG_M686
+          ./scripts/config --enable CONFIG_X86_PAE
+          ./scripts/config --disable CONFIG_64BIT
+          
+          # Performance & Latency (Max throughput)
+          ./scripts/config --enable CONFIG_PREEMPT
+          ./scripts/config --enable CONFIG_HZ_1000
+          ./scripts/config --set-val CONFIG_HZ 1000
+          
+          # Disable Mitigations (No-Security mode for speed)
+          ./scripts/config --disable CONFIG_CPU_MITIGATIONS
+          ./scripts/config --disable CONFIG_PAGE_TABLE_ISOLATION
+          ./scripts/config --disable CONFIG_RETPOLINE
+          
+          # Power Management (Disabled for performance)
+          ./scripts/config --disable CONFIG_CPU_FREQ
+          ./scripts/config --disable CONFIG_PM
+          
+          # Strip Debugging
+          ./scripts/config --disable CONFIG_DEBUG_KERNEL
+          ./scripts/config --disable CONFIG_DEBUG_INFO
+          
+          make ARCH=i386 olddefconfig
+
+      - name: Compile
+        run: |
+          cd ${{ env.KDIR }}
+          make ARCH=i386 bindeb-pkg -j$(nproc) LOCALVERSION=-atom-extreme
+
+      - name: Upload Artifacts
+        uses: actions/upload-artifact@v4
+        with:
+          name: kernel-atom-n270
+          path: "*.deb"
