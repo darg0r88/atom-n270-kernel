@@ -9,12 +9,23 @@ jobs:
   build:
     runs-on: ubuntu-latest
     steps:
+      - name: Maximize Build Space
+        run: |
+          sudo rm -rf /usr/share/dotnet
+          sudo rm -rf /usr/local/lib/android
+          sudo rm -rf /opt/ghc
+          sudo rm -rf /usr/local/share/boost
+          sudo rm -rf "$AGENT_TOOLSDIRECTORY"
+
       - name: Dependencies
-        run: sudo apt-get update && sudo apt-get install -y build-essential libncurses-dev bison flex libssl-dev libelf-dev xz-utils wget bc gcc-multilib rsync kmod dwarves
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y build-essential libncurses-dev bison flex libssl-dev libelf-dev xz-utils wget bc gcc-multilib rsync kmod dwarves pahole zstd
 
       - name: Fetch Kernel
         run: |
           KVER=$(wget -qO- https://www.kernel.org/finger_banner | grep 'The latest stable' | awk '{print $NF}')
+          echo "Compiling Kernel Version: $KVER"
           wget https://cdn.kernel.org/pub/linux/kernel/v6.x/linux-$KVER.tar.xz
           tar -xf linux-$KVER.tar.xz
           echo "KDIR=linux-$KVER" >> $GITHUB_ENV
@@ -24,35 +35,47 @@ jobs:
           cd ${{ env.KDIR }}
           make ARCH=i386 i386_defconfig
           
-          # CPU & Arch (N270 optimization)
+          # CPU Optimization for Atom N270 (Bonnell)
           ./scripts/config --enable CONFIG_MATOM
           ./scripts/config --disable CONFIG_M686
           ./scripts/config --enable CONFIG_X86_PAE
+          ./scripts/config --enable CONFIG_HIGHMEM64G
           ./scripts/config --disable CONFIG_64BIT
           
-          # Performance & Latency (Max throughput)
+          # Performance & Latency
           ./scripts/config --enable CONFIG_PREEMPT
+          ./scripts/config --disable CONFIG_PREEMPT_VOLUNTARY
           ./scripts/config --enable CONFIG_HZ_1000
           ./scripts/config --set-val CONFIG_HZ 1000
           
-          # Disable Mitigations (No-Security mode for speed)
+          # Security Mitigations: OFF (MAX SPEED)
           ./scripts/config --disable CONFIG_CPU_MITIGATIONS
           ./scripts/config --disable CONFIG_PAGE_TABLE_ISOLATION
           ./scripts/config --disable CONFIG_RETPOLINE
+          ./scripts/config --disable CONFIG_CPU_IBPB_ENTRY
+          ./scripts/config --disable CONFIG_CPU_IBRS_ENTRY
           
-          # Power Management (Disabled for performance)
+          # Power Management: High Performance
           ./scripts/config --disable CONFIG_CPU_FREQ
           ./scripts/config --disable CONFIG_PM
+          ./scripts/config --disable CONFIG_SUSPEND
+          ./scripts/config --disable CONFIG_HIBERNATION
           
-          # Strip Debugging
+          # Reduce Size & Debug overhead
           ./scripts/config --disable CONFIG_DEBUG_KERNEL
           ./scripts/config --disable CONFIG_DEBUG_INFO
+          ./scripts/config --disable CONFIG_FTRACE
+          ./scripts/config --disable CONFIG_DEBUG_MISC
+          
+          # Disable BTF to avoid 'pahole' version issues
+          ./scripts/config --disable CONFIG_DEBUG_INFO_BTF
           
           make ARCH=i386 olddefconfig
 
       - name: Compile
         run: |
           cd ${{ env.KDIR }}
+          # Usar todos los hilos disponibles para velocidad
           make ARCH=i386 bindeb-pkg -j$(nproc) LOCALVERSION=-atom-extreme
 
       - name: Upload Artifacts
